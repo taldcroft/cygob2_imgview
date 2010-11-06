@@ -1,6 +1,11 @@
+.nfs*
 aplpy
 lopy
 tutorial
 user_interfaces
 *.vots
 *.fits
+datastore.db3
+*.pyc
+*~
+.hg*
