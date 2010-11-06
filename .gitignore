@@ -9,3 +9,7 @@ datastore.db3
 *.pyc
 *~
 .hg*
+all_detections.dat
+new_matches.dat
+files_def.py
+

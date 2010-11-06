@@ -3,7 +3,9 @@ import sys
 import re
 import pygtk
 import gtk
+import cPickle as pickle
 
+import Ska.DBI
 import pyfits
 import aplpy
 import numpy as np
@@ -29,22 +31,26 @@ bands = dict(broad=(500, 7000),
              medium=(1200, 2000),
              hard=(2000,7000))
 
-def get_detections(filename):
+
+def get_detections(db):
     # lower case, change all whitespace to space, and strip leading/trailing spaces
-    lines = [re.sub(r'\s', ' ', x.lower().strip()) for x in open(filename).readlines()]
-    dets = asciitable.read(lines, Reader=asciitable.CommentedHeader)
-    return dict((x['det_id'], x) for x in dets)
+    dets = db.fetchall('select * from dets')
+    dets_dict = {}
+    for det in dets:
+        det['info'] = pickle.loads(str(det['info']))
+        det.update(det['info'])
+        dets_dict[det['id']] = det
+    return dets_dict
 
 
-def get_groups(filename):
-    # # Master_number  Group_members  All_matched_flag  Detection_numbers...
-    # 1	9	1	1	539	802	6441	6677	6839	6915	17592	17847	
-    lines = [re.sub(r'\s', ' ', x.lower().strip()) for x in open(filename).readlines()]
-    groups = dict()
-    for line in lines[1:]:
-        vals = line.split()
-        groups[int(vals[0])] = {'all_matched': bool(vals[2]), 'det_ids': [int(x) for x in vals[3:]]}
-    return groups
+def get_groups(db):
+    groups = db.fetchall('select * from groups')
+    groups_dict = {}
+    for group in groups:
+        group['info'] = pickle.loads(str(group['info']))
+        group.update(group['info'])
+        groups_dict[group['id']] = group
+    return groups_dict
                           
 
 class ImageDisplay(object):
@@ -104,7 +110,7 @@ class TableColumn(dict):
 
 class DetsTable(object):
     def __init__(self):
-        self.colnames = 'det_id obsid ccd band ra dec psf_size'.split()
+        self.colnames = 'id obsid ccdid band ra dec psf_size'.split()
         self.fmt = dict(ra='{0:.4f}', dec='{0:.4f}', psf_size='{0:.2f}')
         self.n_rows = 1
         self.n_cols = 2 + len(self.colnames)
@@ -211,8 +217,9 @@ class InfoPanel(object):
 
 class Controller(object):
     def __init__(self, info_panel, image_display):
-        self.dets = get_detections('all_detections.dat')
-        self.groups = get_groups('new_matches.dat')
+        self.db = Ska.DBI.DBI(server='datastore.db3', dbi='sqlite', autocommit=False, numpy=False)
+        self.dets = get_detections(self.db)
+        self.groups = get_groups(self.db)
         self.group_ids = sorted(self.groups.keys())
         self.index = 0
         self.image_display = image_display
@@ -235,7 +242,7 @@ class Controller(object):
         det_ids = sorted(self.group['det_ids'], key=lambda x: self.dets[x]['psf_size'])
         self.group_dets = [self.dets[x] for x in det_ids]
 
-        obsids = sorted(set(x['obsid'] for x in self.group_dets))
+        obsids = self.group['obsids']
         self.info_panel.obsids_radio.update(obsids)
         self.info_panel.bands_radio.update(['broad', 'soft', 'medium', 'hard'])
 

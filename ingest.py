@@ -47,7 +47,8 @@ for cat in ('cwdet', 'pwdet'):
     print 'writing {0} dets'.format(cat)
     for det in dets:
         info = dict((x, det[x].tolist()) for x in det.dtype.names)
-        db.insert({'id': id_key(cat, det['id']),
+        info['id'] = id_key(cat, det['id'])
+        db.insert({'id': info['id'],
                    'ra': det['ra'],
                    'dec': det['dec'],
                    'flag': 0,
@@ -59,7 +60,7 @@ for i, group in enumerate(groups):
     try:
         info = dict((x, group[x].tolist()) for x in group.dtype.names)
         info['obsids'] = groups_obsids_dict[group['id']]
-        info['detids'] = groups_detids_dict[group['id']]
+        info['det_ids'] = groups_detids_dict[group['id']]
         info['views'] = []
         info['comment'] = ""
         db.insert({'id': group['id'],
