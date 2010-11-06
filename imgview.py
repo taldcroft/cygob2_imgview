@@ -110,7 +110,7 @@ class TableColumn(dict):
 
 class DetsTable(object):
     def __init__(self):
-        self.colnames = 'id obsid ccdid band ra dec psf_size'.split()
+        self.colnames = 'id obsid band ra dec psf_size net_counts src_significance'.split()
         self.fmt = dict(ra='{0:.4f}', dec='{0:.4f}', psf_size='{0:.2f}')
         self.n_rows = 1
         self.n_cols = 2 + len(self.colnames)
@@ -149,8 +149,9 @@ class ValsRadio(object):
         self.widgets = []
         self.hbox = gtk.HBox(False, 0)
         self.name = name
+        self.vals = []
 
-    def update(self, vals):
+    def update(self, vals, val_select=None):
         self.vals = list(vals)
         for widget in self.widgets:
             self.hbox.remove(widget)
@@ -160,11 +161,24 @@ class ValsRadio(object):
             group = (self.widgets[0] if j else None)
             widget = gtk.RadioButton(group=group, label=str(val).title())
             widget.connect('toggled', self.callback)
+            if val_select is not None:
+                widget.set_active(val == val_select)
             self.widgets.append(widget)
             self.hbox.pack_start(widget, False, False, 0)
             widget.show()
         
+##        if val_select is not None:
+##            for val, widget in zip(self.vals, self.widgets):
+##                print 'hey there! setting active', self.name, val, val_select, val == val_select
+##                try:
+                    
+##                except:
+##                    print 'DAMN!'
+        print 'the val is now', self.name, self.get_val()
+        print 'done getting the val', self.name
+
     def get_val(self):
+        print 'get_val', self.name, self.vals
         for val, widget in zip(self.vals, self.widgets):
             if widget.get_active():
                 return val
@@ -178,8 +192,16 @@ class InfoPanel(object):
     def __init__(self):
         self.vbox = gtk.VBox(False, 0)
         # Top row of nav buttons
-        self.next = gtk.Button(label='Next', stock=gtk.STOCK_GO_FORWARD)
-        self.prev = gtk.Button(label='Prev', stock=gtk.STOCK_GO_BACK)
+        image = gtk.Image()
+        image.set_from_stock(gtk.STOCK_GO_FORWARD, gtk.ICON_SIZE_BUTTON)
+        self.next = gtk.Button()
+        self.next.set_image(image)
+
+        image = gtk.Image()
+        image.set_from_stock(gtk.STOCK_GO_BACK, gtk.ICON_SIZE_BUTTON)
+        self.prev = gtk.Button()
+        self.prev.set_image(image)
+
         self.randomize = gtk.ToggleButton('Randomize')
         self.randomize.set_active(False)
         self.group_id_entry = gtk.Entry(max=6)
@@ -220,7 +242,8 @@ class Controller(object):
         self.db = Ska.DBI.DBI(server='datastore.db3', dbi='sqlite', autocommit=False, numpy=False)
         self.dets = get_detections(self.db)
         self.groups = get_groups(self.db)
-        self.group_ids = sorted(self.groups.keys())
+        self.group_ids = [x['id'] for x in self.db.fetchall('select id from groups')]
+        # sorted(self.groups.keys())
         self.index = 0
         self.image_display = image_display
         self.info_panel = info_panel
@@ -239,11 +262,11 @@ class Controller(object):
         group_id = self.group_ids[self.index]
         self.info_panel.group_id = group_id
         self.group = self.groups[group_id]
-        det_ids = sorted(self.group['det_ids'], key=lambda x: self.dets[x]['psf_size'])
+        det_ids = sorted(self.group['det_ids'], key=lambda x: -self.dets[x]['src_significance'])
         self.group_dets = [self.dets[x] for x in det_ids]
 
-        obsids = self.group['obsids']
-        self.info_panel.obsids_radio.update(obsids)
+        obsids = sorted(self.group['obsids'])
+        self.info_panel.obsids_radio.update(obsids, self.dets[det_ids[0]]['obsid'])
         self.info_panel.bands_radio.update(['broad', 'soft', 'medium', 'hard'])
 
         self.info_panel.dets_table.update(self.group_dets)
@@ -253,8 +276,7 @@ class Controller(object):
         self.update_image(None)
 
     def update_image(self, widget):
-        det = self.group_dets[0]
-        ra, dec = det['ra'], det['dec']
+        ra, dec = self.group['ra'], self.group['dec']
         obsid = self.info_panel.obsids_radio.get_val()
         band = self.info_panel.bands_radio.get_val()
         if src['obsid'].val != obsid:
