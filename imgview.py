@@ -160,19 +160,21 @@ class ValsRadio(object):
         for j, val in enumerate(self.vals):
             group = (self.widgets[0] if j else None)
             widget = gtk.RadioButton(group=group, label=str(val).title())
-            widget.connect('toggled', self.callback)
-            if val_select is not None:
-                widget.set_active(val == val_select)
             self.widgets.append(widget)
             self.hbox.pack_start(widget, False, False, 0)
+            if val_select is not None:
+                widget.set_active(val == val_select)
             widget.show()
+
+        for widget in self.widgets:
+            widget.connect('toggled', self.callback)
 
     def get_val(self):
         for val, widget in zip(self.vals, self.widgets):
             if widget.get_active():
                 return val
         else:
-            raise ValueError('No radio button selected')
+            raise ValueError('No radio button selected for {0}'.format(self.name))
 
     def set_callback(self, callback):
         self.callback = callback
@@ -276,6 +278,9 @@ class Controller(object):
         self.update_image(None)
 
     def update_image(self, widget):
+        # RadioButton group toggle fires two callbacks, just respond to active one
+        if isinstance(widget, gtk.RadioButton) and not widget.get_active():
+            return 
         ra, dec = self.group['ra'], self.group['dec']
         obsid = self.info_panel.obsids_radio.get_val()
         band = self.info_panel.bands_radio.get_val()
