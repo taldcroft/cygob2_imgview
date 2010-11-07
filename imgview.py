@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 import sys
+import os
+import time
 import re
 import pygtk
 import gtk
@@ -32,26 +34,6 @@ bands = dict(broad=(500, 7000),
              hard=(2000,7000))
 
 
-def get_detections(db):
-    # lower case, change all whitespace to space, and strip leading/trailing spaces
-    dets = db.fetchall('select * from dets')
-    dets_dict = {}
-    for det in dets:
-        det['info'] = pickle.loads(str(det['info']))
-        det.update(det['info'])
-        dets_dict[det['id']] = det
-    return dets_dict, dets
-
-
-def get_groups(db):
-    groups = db.fetchall('select * from groups')
-    groups_dict = {}
-    for group in groups:
-        group['info'] = pickle.loads(str(group['info']))
-        group.update(group['info'])
-        groups_dict[group['id']] = group
-    return groups_dict
-                          
 
 class ImageDisplay(object):
     def __init__(self, win, size, show_labels=True):
@@ -198,6 +180,7 @@ class InfoPanel(object):
         self.group_id_entry = gtk.Entry(max=6)
         self.group_id_entry.set_width_chars(6)
 
+
         hbox1 = gtk.HBox(False, 0)
         hbox1.pack_start(self.prev, False, False, 0)
         hbox1.pack_start(self.next, False, False, 0)
@@ -212,12 +195,30 @@ class InfoPanel(object):
         self.bands_radio = ValsRadio('bands')
         hbox3.pack_start(self.bands_radio.hbox, False, False, 0)
         
+        hbox4 = gtk.HBox()
+        hbox4.set_border_width(4)
+        sw = gtk.ScrolledWindow()
+        sw.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+        self.comment_textview = gtk.TextView()
+        self.comment_textview.set_wrap_mode(gtk.WRAP_WORD)
+        self.comment_textbuffer = self.comment_textview.get_buffer()
+        sw.add(self.comment_textview)
+        hbox4.pack_start(sw, True, True, 3)
+
+        sw = gtk.ScrolledWindow()
+        sw.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+        self.views_textview = gtk.TextView()
+        self.views_textview.set_wrap_mode(gtk.WRAP_WORD)
+        self.views_textbuffer = self.views_textview.get_buffer()
+        sw.add(self.views_textview)
+        hbox4.pack_start(sw, True, True, 3)
+
         self.dets_table = DetsTable()
         self.vbox.pack_start(hbox1, False, False, 0)
         self.vbox.pack_start(hbox2, False, False, 0)
         self.vbox.pack_start(hbox3, False, False, 0)
+        self.vbox.pack_start(hbox4, False, False, 0)
         self.vbox.pack_start(self.dets_table.scrolled_window, True, True, 0)
-        #self.vbox.pack_start(self.dets_table.vbox, True, True, 0)
 
     def get_group_id(self):
         return int(self.group_id_entry.get_text())
@@ -231,19 +232,27 @@ class InfoPanel(object):
 class Controller(object):
     def __init__(self, info_panel, image_display):
         self.db = Ska.DBI.DBI(server='datastore.db3', dbi='sqlite', autocommit=False, numpy=False)
-        self.dets, self.dets_table = get_detections(self.db)
-        self.groups = get_groups(self.db)
-        self.group_ids = [x['id'] for x in self.db.fetchall('select id from groups')]
-        # sorted(self.groups.keys())
+        self.dets, self.dets_table = self.fetch_detections()
+        self.det_ras = np.array([x['ra'] for x in self.dets_table])
+        self.det_decs = np.array([x['dec'] for x in self.dets_table])
+        self.groups = self.fetch_groups()
+        self.group_ids = [x['id'] for x in self.db.fetchall('select id from groups order by id asc')]
+        self.group = None
         self.index = 0
         self.image_display = image_display
         self.info_panel = info_panel
         self.evt2_cache = {}
         self.image_cache = {}
-        self.det_ras = np.array([x['ra'] for x in self.dets_table])
-        self.det_decs = np.array([x['dec'] for x in self.dets_table])
 
-    def update_group(self, widget=None, offset=None):
+    def new_group(self, widget=None, offset=None):
+        # Store comment (if modified) to database for current group
+        if self.group:
+            buff = self.info_panel.comment_textbuffer
+            if buff.get_modified():
+                start, end = buff.get_bounds()
+                self.group['info']['comment'] = buff.get_text(start, end)
+                self.store_group(self.group)
+        
         if offset is None:
             try:
                 self.index = self.group_ids.index(self.info_panel.group_id)
@@ -254,11 +263,27 @@ class Controller(object):
 
         group_id = self.group_ids[self.index]
         self.info_panel.group_id = group_id
-        self.group = self.groups[group_id]
-        det_ids = sorted(self.group['det_ids'], key=lambda x: -self.dets[x]['src_significance'])
+        self.group = self.fetch_group(group_id)
+        self.groups[group_id] = self.group  # refresh the in-memory version
+        det_ids = sorted(self.group['info']['det_ids'],
+                         key=lambda x: -self.dets[x]['src_significance'])
         self.group_dets = [self.dets[x] for x in det_ids]
 
-        obsids = sorted(self.group['obsids'])
+        # Update view info (unless within an hour of previous view) and store to DB
+        newview = {'user': os.environ['USER'], 'time': time.time(),
+                   'date': time.strftime('%Y-%m-%d %H:%M')}
+        views = self.group['info']['views']
+        for view in views:
+            if newview['user'] == view['user'] and newview['time'] - view['time'] < 3600:
+                break
+        else:
+            views.insert(0, newview)
+            self.store_group(self.group)
+        
+        views_text = '\n'.join('{0}  {1}'.format(x['date'], x['user']) for x in views)
+        self.info_panel.views_textbuffer.set_text(views_text)
+
+        obsids = sorted(self.group['info']['obsids'])
         self.info_panel.obsids_radio.update(obsids, self.dets[det_ids[0]]['obsid'])
         self.info_panel.bands_radio.update(['broad', 'soft', 'medium', 'hard'])
 
@@ -313,7 +338,7 @@ class Controller(object):
                                 edgecolor='g'))
 
         for i, det in enumerate(self.image_dets):
-            if det['id'] not in self.group['det_ids']:
+            if det['id'] not in self.group['info']['det_ids']:
                 regions.append(dict(ra=det['ra'],
                                     dec=det['dec'],
                                     radius=det['psf_size'] * 0.5 / 3600.0,
@@ -330,6 +355,35 @@ class Controller(object):
             self.group_ids = sorted(groups.keys())
         self.index = self.group_ids.index(self.info_panel.group_id)
 
+    def fetch_detections(self):
+        # lower case, change all whitespace to space, and strip leading/trailing spaces
+        dets = self.db.fetchall('select * from dets')
+        dets_dict = {}
+        for det in dets:
+            det['info'] = pickle.loads(str(det['info']))
+            det.update(det['info'])
+            dets_dict[det['id']] = det
+        return dets_dict, dets
+
+    def fetch_groups(self):
+        groups = self.db.fetchall('select * from groups')
+        groups_dict = {}
+        for group in groups:
+            group['info'] = pickle.loads(str(group['info']))
+            groups_dict[group['id']] = group
+        return groups_dict
+
+    def fetch_group(self, group_id):
+        group = self.db.fetchone('select * from groups where id={0}'.format(group_id))
+        if group is None:
+            raise ValueError('No group matching id={0}'.format(group_id))
+        group['info'] = pickle.loads(str(group['info']))
+        return group
+
+    def store_group(self, group):
+        group = group.copy()
+        group['info'] = pickle.dumps(group['info'])
+        self.db.insert(group, 'groups', replace=True, commit=True)
 
 # Create the main window
 win = gtk.Window()
@@ -348,13 +402,13 @@ win.add(main_box)
 controller = Controller(info_panel, image_display)
 
 # Set up signals
-info_panel.next.connect('clicked', controller.update_group, 1)
-info_panel.prev.connect('clicked', controller.update_group, -1)
-info_panel.group_id_entry.connect('activate', controller.update_group)
+info_panel.next.connect('clicked', controller.new_group, 1)
+info_panel.prev.connect('clicked', controller.new_group, -1)
+info_panel.group_id_entry.connect('activate', controller.new_group)
 info_panel.randomize.connect('toggled', controller.update_randomize)
 info_panel.obsids_radio.set_callback(controller.update_image)
 info_panel.bands_radio.set_callback(controller.update_image)
 
-controller.update_group()
+controller.new_group()
 win.show_all()
 gtk.main()
