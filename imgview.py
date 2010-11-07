@@ -24,6 +24,7 @@ import files_def
 src = pyyaks.context.ContextDict('src')
 files = pyyaks.context.ContextDict('files', basedir='/data/cygob2/process/data/baseline/v3')
 files.update(files_def.files)
+dbfile = '/data/cygob2/tables/datastore.db3'
 
 geom = dict(main_image_size=8,
             main_image_arcsec=30,
@@ -39,6 +40,7 @@ class ImageDisplay(object):
     def __init__(self, win, size, show_labels=True):
         fig = Figure(figsize=(size, size))
         canvas = FigureCanvas(fig)  # a gtk.DrawingArea
+        canvas.set_size_request(500, 500)
         toolbar = NavigationToolbar(canvas, win)
         self.vbox = gtk.VBox()
         self.vbox.pack_start(canvas)
@@ -245,7 +247,7 @@ class InfoPanel(object):
 
 class Controller(object):
     def __init__(self, info_panel, image_display):
-        self.db = Ska.DBI.DBI(server='datastore.db3', dbi='sqlite', autocommit=False, numpy=False)
+        self.db = Ska.DBI.DBI(server=dbfile, dbi='sqlite', autocommit=False, numpy=False)
         self.dets, self.dets_table = self.fetch_detections()
         self.det_ras = np.array([x['ra'] for x in self.dets_table])
         self.det_decs = np.array([x['dec'] for x in self.dets_table])
@@ -292,6 +294,7 @@ class Controller(object):
                                                               x['status'] or '-')
                                for x in self.get_user_views())
         self.info_panel.views_textbuffer.set_text(views_text)
+        self.info_panel.comment_textbuffer.set_text(self.group['info']['comment'])
 
         obsids = sorted(self.group['info']['obsids'])
         self.info_panel.obsids_radio.update(obsids, self.dets[det_ids[0]]['obsid'])
@@ -410,15 +413,15 @@ class Controller(object):
 # Create the main window
 win = gtk.Window()
 win.connect("destroy", lambda x: gtk.main_quit())
-win.set_default_size(1400, 700)
+win.set_default_size(1200, 700)
 win.set_title("CygOB2 Image Browser")
 
 image_display = ImageDisplay(win, size=geom['main_image_size'])
 info_panel = InfoPanel()
 
-main_box = gtk.HBox(homogeneous=True, spacing=0)
+main_box = gtk.HBox(homogeneous=False, spacing=0)
 main_box.pack_start(info_panel.vbox)
-main_box.pack_start(image_display.vbox)
+main_box.pack_start(image_display.vbox, False, False, 0)
 win.add(main_box)
 
 controller = Controller(info_panel, image_display)
