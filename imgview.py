@@ -175,6 +175,16 @@ class InfoPanel(object):
         self.prev = gtk.Button()
         self.prev.set_image(image)
 
+        image = gtk.Image()
+        image.set_from_stock(gtk.STOCK_APPLY, gtk.ICON_SIZE_BUTTON)
+        self.ok_button = gtk.Button(label='ok')
+        self.ok_button.set_image(image)
+
+        image = gtk.Image()
+        image.set_from_stock(gtk.STOCK_CANCEL, gtk.ICON_SIZE_BUTTON)
+        self.bad_button = gtk.Button(label='bad')
+        self.bad_button.set_image(image)
+
         self.randomize = gtk.ToggleButton('Randomize')
         self.randomize.set_active(False)
         self.group_id_entry = gtk.Entry(max=6)
@@ -184,6 +194,8 @@ class InfoPanel(object):
         hbox1 = gtk.HBox(False, 0)
         hbox1.pack_start(self.prev, False, False, 0)
         hbox1.pack_start(self.next, False, False, 0)
+        hbox1.pack_start(self.ok_button, False, False, 0)
+        hbox1.pack_start(self.bad_button, False, False, 0)
         hbox1.pack_start(self.group_id_entry, False, False, 0)
         hbox1.pack_start(self.randomize, False, False, 0)
 
@@ -214,11 +226,13 @@ class InfoPanel(object):
         hbox4.pack_start(sw, True, True, 3)
 
         self.dets_table = DetsTable()
+        self.other_dets_table = DetsTable()
         self.vbox.pack_start(hbox1, False, False, 0)
         self.vbox.pack_start(hbox2, False, False, 0)
         self.vbox.pack_start(hbox3, False, False, 0)
         self.vbox.pack_start(hbox4, False, False, 0)
         self.vbox.pack_start(self.dets_table.scrolled_window, True, True, 0)
+        self.vbox.pack_start(self.other_dets_table.scrolled_window, True, True, 0)
 
     def get_group_id(self):
         return int(self.group_id_entry.get_text())
@@ -244,14 +258,9 @@ class Controller(object):
         self.evt2_cache = {}
         self.image_cache = {}
 
-    def new_group(self, widget=None, offset=None):
+    def new_group(self, widget=None, offset=None, status=None):
         # Store comment (if modified) to database for current group
-        if self.group:
-            buff = self.info_panel.comment_textbuffer
-            if buff.get_modified():
-                start, end = buff.get_bounds()
-                self.group['info']['comment'] = buff.get_text(start, end)
-                self.store_group(self.group)
+        self.store_group(status)
         
         if offset is None:
             try:
@@ -269,18 +278,19 @@ class Controller(object):
                          key=lambda x: -self.dets[x]['src_significance'])
         self.group_dets = [self.dets[x] for x in det_ids]
 
-        # Update view info (unless within an hour of previous view) and store to DB
-        newview = {'user': os.environ['USER'], 'time': time.time(),
-                   'date': time.strftime('%Y-%m-%d %H:%M')}
-        views = self.group['info']['views']
-        for view in views:
-            if newview['user'] == view['user'] and newview['time'] - view['time'] < 3600:
-                break
-        else:
-            views.insert(0, newview)
-            self.store_group(self.group)
-        
-        views_text = '\n'.join('{0}  {1}'.format(x['date'], x['user']) for x in views)
+        # Find detections near image window
+        ra0 = self.group['ra']
+        dec0 = self.group['dec']
+        dec_halfwidth = geom['main_image_arcsec'] / 3600. / 2.
+        ra_halfwidth = dec_halfwidth / np.cos(np.radians(dec0))
+        ok = ((abs(self.det_ras - ra0) < ra_halfwidth)
+              & (abs(self.det_decs - dec0) < dec_halfwidth))
+        self.other_dets = [self.dets_table[i] for i in np.flatnonzero(ok)
+                           if self.dets_table[i]['id'] not in det_ids]
+
+        views_text = '\n'.join('{0:15s} {1:15s} {2}'.format(x['date'], x['user'],
+                                                              x['status'] or '-')
+                               for x in self.get_user_views())
         self.info_panel.views_textbuffer.set_text(views_text)
 
         obsids = sorted(self.group['info']['obsids'])
@@ -291,14 +301,9 @@ class Controller(object):
         for widget in info_panel.dets_table.region_select.values():
             widget.connect('toggled', self.update_regions)
 
-        # Find detections near image window
-        ra0 = self.group['ra']
-        dec0 = self.group['dec']
-        dec_halfwidth = geom['main_image_arcsec'] / 3600. / 2. * 1.1
-        ra_halfwidth = dec_halfwidth / np.cos(np.radians(dec0))
-        ok = ((abs(self.det_ras - ra0) < ra_halfwidth)
-              & (abs(self.det_decs - dec0) < dec_halfwidth))
-        self.image_dets = [self.dets_table[i] for i in np.flatnonzero(ok)]
+        self.info_panel.other_dets_table.update(self.other_dets)
+        for widget in info_panel.other_dets_table.region_select.values():
+            widget.connect('toggled', self.update_regions)
 
         self.update_image(None)
 
@@ -330,21 +335,15 @@ class Controller(object):
 
     def update_regions(self, widget=None):
         regions = []
-        for i, det in enumerate(self.group_dets):
-            regions.append(dict(ra=det['ra'],
-                                dec=det['dec'],
-                                radius=det['psf_size'] * 0.5 / 3600.0,
-                                active=self.info_panel.dets_table.region_select[i].get_active(),
-                                edgecolor='g'))
-
-        for i, det in enumerate(self.image_dets):
-            if det['id'] not in self.group['info']['det_ids']:
+        for dets, dets_table, edgecolor in (
+            (self.group_dets, self.info_panel.dets_table, 'g'),
+            (self.other_dets, self.info_panel.other_dets_table, 'm')):
+            for i, det in enumerate(dets):
                 regions.append(dict(ra=det['ra'],
                                     dec=det['dec'],
                                     radius=det['psf_size'] * 0.5 / 3600.0,
-                                    active=False,
-                                    edgecolor='y'))
-                
+                                    active=dets_table.region_select[i].get_active(),
+                                    edgecolor=edgecolor))
         self.image_display.update_regions(regions)
         self.image_display.refresh()
 
@@ -380,15 +379,38 @@ class Controller(object):
         group['info'] = pickle.loads(str(group['info']))
         return group
 
-    def store_group(self, group):
-        group = group.copy()
+    def get_user_views(self):
+        user_views = {}
+        for view in self.group['info']['views']:
+            user = view['user']
+            if user not in user_views or view['status'] is not None:
+                user_views[user] = view
+        return sorted(user_views.values(), key=lambda x: -x['time'])
+
+    def store_group(self, status=None):
+        if self.group is None:
+            return
+
+        buff = self.info_panel.comment_textbuffer
+        start, end = buff.get_bounds()
+        self.group['info']['comment'] = buff.get_text(start, end)
+
+        # Add the current view and status info
+        newview = {'user': os.environ['USER'],
+                   'time': time.time(),
+                   'date': time.strftime('%Y-%m-%d %H:%M'),
+                   'status': status}
+        self.group['info']['views'].append(newview)
+
+        group = self.group.copy()
         group['info'] = pickle.dumps(group['info'])
         self.db.insert(group, 'groups', replace=True, commit=True)
+
 
 # Create the main window
 win = gtk.Window()
 win.connect("destroy", lambda x: gtk.main_quit())
-win.set_default_size(1200, 600)
+win.set_default_size(1400, 700)
 win.set_title("CygOB2 Image Browser")
 
 image_display = ImageDisplay(win, size=geom['main_image_size'])
@@ -404,6 +426,8 @@ controller = Controller(info_panel, image_display)
 # Set up signals
 info_panel.next.connect('clicked', controller.new_group, 1)
 info_panel.prev.connect('clicked', controller.new_group, -1)
+info_panel.ok_button.connect('clicked', controller.new_group, 1, 'OK')
+info_panel.bad_button.connect('clicked', controller.new_group, 1, 'BAD')
 info_panel.group_id_entry.connect('activate', controller.new_group)
 info_panel.randomize.connect('toggled', controller.update_randomize)
 info_panel.obsids_radio.set_callback(controller.update_image)
