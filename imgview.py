@@ -24,7 +24,7 @@ files = pyyaks.context.ContextDict('files', basedir='/data/cygob2/process/data/b
 files.update(files_def.files)
 
 geom = dict(main_image_size=8,
-            obs_image_size=2.5,
+            main_image_arcsec=30,
             n_obs_frames=2)
 bands = dict(broad=(500, 7000),
              soft=(500, 1200),
@@ -40,7 +40,7 @@ def get_detections(db):
         det['info'] = pickle.loads(str(det['info']))
         det.update(det['info'])
         dets_dict[det['id']] = det
-    return dets_dict
+    return dets_dict, dets
 
 
 def get_groups(db):
@@ -166,19 +166,8 @@ class ValsRadio(object):
             self.widgets.append(widget)
             self.hbox.pack_start(widget, False, False, 0)
             widget.show()
-        
-##        if val_select is not None:
-##            for val, widget in zip(self.vals, self.widgets):
-##                print 'hey there! setting active', self.name, val, val_select, val == val_select
-##                try:
-                    
-##                except:
-##                    print 'DAMN!'
-        print 'the val is now', self.name, self.get_val()
-        print 'done getting the val', self.name
 
     def get_val(self):
-        print 'get_val', self.name, self.vals
         for val, widget in zip(self.vals, self.widgets):
             if widget.get_active():
                 return val
@@ -240,7 +229,7 @@ class InfoPanel(object):
 class Controller(object):
     def __init__(self, info_panel, image_display):
         self.db = Ska.DBI.DBI(server='datastore.db3', dbi='sqlite', autocommit=False, numpy=False)
-        self.dets = get_detections(self.db)
+        self.dets, self.dets_table = get_detections(self.db)
         self.groups = get_groups(self.db)
         self.group_ids = [x['id'] for x in self.db.fetchall('select id from groups')]
         # sorted(self.groups.keys())
@@ -249,6 +238,8 @@ class Controller(object):
         self.info_panel = info_panel
         self.evt2_cache = {}
         self.image_cache = {}
+        self.det_ras = np.array([x['ra'] for x in self.dets_table])
+        self.det_decs = np.array([x['dec'] for x in self.dets_table])
 
     def update_group(self, widget=None, offset=None):
         if offset is None:
@@ -273,6 +264,15 @@ class Controller(object):
         for widget in info_panel.dets_table.region_select.values():
             widget.connect('toggled', self.update_regions)
 
+        # Find detections near image window
+        ra0 = self.group['ra']
+        dec0 = self.group['dec']
+        dec_halfwidth = geom['main_image_arcsec'] / 3600. / 2. * 1.1
+        ra_halfwidth = dec_halfwidth / np.cos(np.radians(dec0))
+        ok = ((abs(self.det_ras - ra0) < ra_halfwidth)
+              & (abs(self.det_decs - dec0) < dec_halfwidth))
+        self.image_dets = [self.dets_table[i] for i in np.flatnonzero(ok)]
+
         self.update_image(None)
 
     def update_image(self, widget):
@@ -291,7 +291,8 @@ class Controller(object):
             key = (obsid, band, x, y)
             image = self.image_cache[key]
         except KeyError:
-            image = self.evt2.binned_image(x0=x-30, x1=x+30, y0=y-30, y1=y+30,
+            sz = geom['main_image_arcsec'] # divide by 2 for half-width and mult by 2 for pixels
+            image = self.evt2.binned_image(x0=x-sz, x1=x+sz, y0=y-sz, y1=y+sz,
                                            filters={'energy': bands[band]})
             self.image_cache[key] = image
         self.image_display.update_image(image)
@@ -305,6 +306,15 @@ class Controller(object):
                                 radius=det['psf_size'] * 0.5 / 3600.0,
                                 active=self.info_panel.dets_table.region_select[i].get_active(),
                                 edgecolor='g'))
+
+        for i, det in enumerate(self.image_dets):
+            if det['id'] not in self.group['det_ids']:
+                regions.append(dict(ra=det['ra'],
+                                    dec=det['dec'],
+                                    radius=det['psf_size'] * 0.5 / 3600.0,
+                                    active=False,
+                                    edgecolor='y'))
+                
         self.image_display.update_regions(regions)
         self.image_display.refresh()
 
