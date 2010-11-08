@@ -70,7 +70,7 @@ for i, group in enumerate(groups):
                    'info': pickle.dumps(info)}, 'groups')
     except Exception, err:
         print 'Failure for group_id={0}: {1}'.format(group['id'], err)
-        pass
+
 db.commit()
 
 for table_name, id_type in (('dets', 'text'),

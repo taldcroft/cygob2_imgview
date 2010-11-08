@@ -34,8 +34,6 @@ bands = dict(broad=(500, 7000),
              medium=(1200, 2000),
              hard=(2000,7000))
 
-
-
 class ImageDisplay(object):
     def __init__(self, win, size, show_labels=True):
         fig = Figure(figsize=(size, size))
@@ -97,7 +95,7 @@ class DetsTable(object):
         self.colnames = 'id obsid band ra dec psf_size net_counts src_significance'.split()
         self.fmt = dict(ra='{0:.4f}', dec='{0:.4f}', psf_size='{0:.2f}')
         self.n_rows = 1
-        self.n_cols = 2 + len(self.colnames)
+        self.n_cols = 1 + len(self.colnames)
 
         self.table = gtk.Table(rows=self.n_rows, columns=self.n_cols)
 
@@ -118,7 +116,7 @@ class DetsTable(object):
         for det_labels in self.det_labels.values():
             det_labels.clear()
 
-        self.n_rows = len(group_dets)
+        self.n_rows = len(group_dets) + 1
         self.table.resize(self.n_rows, self.n_cols)
         
         for i, det in enumerate(group_dets):
