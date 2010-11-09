@@ -6,6 +6,7 @@ import re
 import pygtk
 import gtk
 import cPickle as pickle
+import argparse
 
 import Ska.DBI
 import pyfits
@@ -24,15 +25,22 @@ import files_def
 src = pyyaks.context.ContextDict('src')
 files = pyyaks.context.ContextDict('files', basedir='/data/cygob2/process/data/baseline/v3')
 files.update(files_def.files)
-dbfile = '/data/cygob2/tables/datastore.db3'
 
 geom = dict(main_image_size=8,
-            main_image_arcsec=30,
+            main_image_arcsec=20,
             n_obs_frames=2)
 bands = dict(broad=(500, 7000),
              soft=(500, 1200),
              medium=(1200, 2000),
              hard=(2000,7000))
+
+def weighted_mean(vals, val_errs):
+    vals = np.array(vals)
+    val_errs = np.array(val_errs)
+    if np.any(val_errs <= 0):
+        return float(np.mean(vals))
+    else:
+        return float(np.sum(vals / val_errs) / np.sum(1.0 / val_errs))
 
 class ImageDisplay(object):
     def __init__(self, win, size, show_labels=True):
@@ -190,6 +198,9 @@ class InfoPanel(object):
         self.group_id_entry = gtk.Entry(max=6)
         self.group_id_entry.set_width_chars(6)
 
+        self.split_group = gtk.Button('Split')
+        self.split_group.set_name('split')
+        self.remove_dets = gtk.Button('Remove')
 
         hbox1 = gtk.HBox(False, 0)
         hbox1.pack_start(self.prev, False, False, 0)
@@ -198,6 +209,8 @@ class InfoPanel(object):
         hbox1.pack_start(self.bad_button, False, False, 0)
         hbox1.pack_start(self.group_id_entry, False, False, 0)
         hbox1.pack_start(self.randomize, False, False, 0)
+        hbox1.pack_start(self.split_group, False, False, 0)
+        hbox1.pack_start(self.remove_dets, False, False, 0)
 
         hbox2 = gtk.HBox(False, 0)
         self.obsids_radio = ValsRadio('obsids')
@@ -244,7 +257,7 @@ class InfoPanel(object):
 
 
 class Controller(object):
-    def __init__(self, info_panel, image_display):
+    def __init__(self, info_panel, image_display, dbfile):
         self.db = Ska.DBI.DBI(server=dbfile, dbi='sqlite', autocommit=False, numpy=False)
         self.dets, self.dets_table = self.fetch_detections()
         self.det_ras = np.array([x['ra'] for x in self.dets_table])
@@ -407,12 +420,78 @@ class Controller(object):
         group['info'] = pickle.dumps(group['info'])
         self.db.insert(group, 'groups', replace=True, commit=True)
 
+    def split_group(self, widget):
+        split = widget.get_name() == 'split'
+        region_selects = self.info_panel.dets_table.region_select
+        dets1 = [det for i, det in enumerate(self.group_dets)
+                 if not region_selects[i].get_active()]
+        dets2 = [det for i, det in enumerate(self.group_dets)
+                 if region_selects[i].get_active()]
+        if not dets1 or not dets2:
+            print('ERROR: must have at least one detection in both the existing and new groups')
+            return
+
+        det_ids1 = [x['id'] for x in dets1]
+        det_ids2 = [x['id'] for x in dets2]
+
+        group1 = self.group
+        group1['info']['det_ids'] = det_ids1
+        # Should be weighted mean
+        ra1 = group1['ra']
+        dec1 = group1['dec']
+        group1['ra'] = weighted_mean([x['ra'] for x in dets1],
+                                     [x['info']['ra_err'] for x in dets1])
+        group1['dec'] = weighted_mean([x['dec'] for x in dets1],
+                                      [x['info']['dec_err'] for x in dets1])
+        group2 = {'id': max(self.groups) + 1, 'flag': 1}
+        group2['ra'] = weighted_mean([x['ra'] for x in dets2],
+                                     [x['info']['ra_err'] for x in dets2])
+        group2['dec'] = weighted_mean([x['dec'] for x in dets2],
+                                      [x['info']['dec_err'] for x in dets2])
+        group2['info'] = {'views': [],
+                          'obsids': group1['info']['obsids'],
+                          'det_ids': det_ids2}
+
+        # Update comment in the current GUI comment box (group1) and add comment for group 2.
+        radec = """\
+RA updated: from {0:.5f} to {1:.5f}
+Dec updated: from {2:.5f} to {3:.5f}"""
+        remove = 'Dets {0} removed from group {1}'.format(det_ids2, group1['id'])
+        add = 'New group {0} created'.format(group2['id'])
+        radec1= radec.format(ra1, group1['ra'], dec1, group1['dec'])
+        radec2= radec.format(ra1, group2['ra'], dec1, group2['dec'])
+        action = 'Action by {0} at {1}\n'.format(os.environ['USER'], time.strftime('%Y-%m-%d %H:%M'))
+        
+        comments1 = [remove, add, radec1, action] if split else [remove, radec1, action]
+        comments1 = '\n'.join(comments1)
+        buff = self.info_panel.comment_textbuffer
+        buff.insert(buff.get_start_iter(), comments1)
+
+        comments2 = '\n'.join([add, radec2, action])
+        group2['info']['comment'] = comments2
+        group2['info'] = pickle.dumps(group2['info'])
+        
+        print comments1
+        if split:
+            self.db.insert(group2, 'groups', replace=True, commit=True)
+            self.groups[group2['id']] = group2
+            self.group_ids.append(group2['id'])
+
+        # Force a refresh of this group.  This also stores the updated group1 (self.group) to DB
+        self.info_panel.group_id = group1['id']
+        self.new_group()
+
+parser = argparse.ArgumentParser(description='View CygOB2 detection groups')
+parser.add_argument('--db', type=str,
+                    default='datastore.db3',
+                    help='Database file name')
+args = parser.parse_args()
 
 # Create the main window
 win = gtk.Window()
 win.connect("destroy", lambda x: gtk.main_quit())
 win.set_default_size(1200, 700)
-win.set_title("CygOB2 Image Browser")
+win.set_title("CygOB2 Image Browser (DB file: {0})".format(args.db))
 
 image_display = ImageDisplay(win, size=geom['main_image_size'])
 info_panel = InfoPanel()
@@ -422,7 +501,7 @@ main_box.pack_start(info_panel.vbox)
 main_box.pack_start(image_display.vbox, False, False, 0)
 win.add(main_box)
 
-controller = Controller(info_panel, image_display)
+controller = Controller(info_panel, image_display, args.db)
 
 # Set up signals
 info_panel.next.connect('clicked', controller.new_group, 1)
@@ -431,6 +510,8 @@ info_panel.ok_button.connect('clicked', controller.new_group, 1, 'OK')
 info_panel.bad_button.connect('clicked', controller.new_group, 1, 'BAD')
 info_panel.group_id_entry.connect('activate', controller.new_group)
 info_panel.randomize.connect('toggled', controller.update_randomize)
+info_panel.split_group.connect('clicked', controller.split_group)
+info_panel.remove_dets.connect('clicked', controller.split_group)
 info_panel.obsids_radio.set_callback(controller.update_image)
 info_panel.bands_radio.set_callback(controller.update_image)
 

@@ -1,5 +1,6 @@
 #!/bin/sh
 
-exec /data/cygob2/imgview/lopy/bin/python /data/cygob2/share/imgview/imgview.py "$@"
+exec /data/cygob2/imgview/lopy/bin/python /data/cygob2/share/imgview/imgview.py \
+  --db /data/cygob2/tables/datastore.db3 "$@"
 
 exit 1
