@@ -77,6 +77,24 @@ class ImageDisplay(object):
                                  layer='circle_set_%d' % (i+1))
 
 
+class HBoxTable(gtk.Table):
+    """Embed each array element in an HBox and make easy setter and getter"""
+    def __init__(self, rows, columns, homogeneous=False):
+        gtk.Table.__init__(self, rows=rows, columns=columns, homogeneous=homogeneous)
+        self.widgets = dict()
+
+    def __setitem__(self, key, val):
+        row = key[0]
+        col = key[1]
+        hbox = gtk.HBox(False, 0)
+        hbox.pack_start(val, False, False, 0)
+        self.attach(hbox, col, col+1, row, row+1)
+        self.widgets[key] = val
+
+    def __getitem__(self, key):
+        return self.widgets[key]
+
+
 class TableColumn(dict):
     def __init__(self, table, name, col):
         self.table = table
@@ -134,30 +152,33 @@ class DetsTable(object):
             self.region_select[i] = gtk.CheckButton()
 
 
-class ValsRadio(object):
-    def __init__(self, name):
+class HBoxValsRadio(gtk.HBox):
+    def __init__(self, name, vals=None, val_select=None):
+        gtk.HBox.__init__(self, False, 0)
         self.widgets = []
-        self.hbox = gtk.HBox(False, 0)
-        self.name = name
+        self.set_name(name)
         self.vals = []
+        if vals is not None:
+            self.update(vals, val_select)
 
     def update(self, vals, val_select=None):
         self.vals = list(vals)
         for widget in self.widgets:
-            self.hbox.remove(widget)
+            self.remove(widget)
         self.widgets = []
 
         for j, val in enumerate(self.vals):
             group = (self.widgets[0] if j else None)
             widget = gtk.RadioButton(group=group, label=str(val).title())
             self.widgets.append(widget)
-            self.hbox.pack_start(widget, False, False, 0)
+            self.pack_start(widget, False, False, 0)
             if val_select is not None:
                 widget.set_active(val == val_select)
             widget.show()
 
-        for widget in self.widgets:
-            widget.connect('toggled', self.callback)
+        if hasattr(self, 'callback'):
+            for widget in self.widgets:
+                widget.connect('toggled', self.callback)
 
     def get_val(self):
         for val, widget in zip(self.vals, self.widgets):
@@ -212,13 +233,27 @@ class InfoPanel(object):
         hbox1.pack_start(self.split_group, False, False, 0)
         hbox1.pack_start(self.remove_dets, False, False, 0)
 
+        table = HBoxTable(rows=3, columns=2)
+        self.obsids_radio = HBoxValsRadio('obsids')
+        self.bands_radio = HBoxValsRadio('bands')
+        min_dets = gtk.Entry(max=4)
+        min_dets.set_width_chars(4)
+        min_dets.set_text('0')
+        table[0, 0] = gtk.Label('Min dets:')
+        table[0, 1] = min_dets
+        table[1, 0] = gtk.Label('Status:')
+        table[1, 1] = HBoxValsRadio('status', ['Any', 'OK', 'Bad'])
+        table[2, 0] = gtk.Label('User:')
+        table[2, 1] = HBoxValsRadio('user', ['Any', 'Me'])
+        table[3, 0] = gtk.Label('Obsids:')
+        table[3, 1] = self.obsids_radio
+        table[4, 0] = gtk.Label('Bands:')
+        table[4, 1] = self.bands_radio
         hbox2 = gtk.HBox(False, 0)
-        self.obsids_radio = ValsRadio('obsids')
-        hbox2.pack_start(self.obsids_radio.hbox, False, False, 0)
-        
-        hbox3 = gtk.HBox(False, 0)
-        self.bands_radio = ValsRadio('bands')
-        hbox3.pack_start(self.bands_radio.hbox, False, False, 0)
+        hbox2.pack_start(table, False, False, 0)
+        self.filter_min_dets = table[0, 1]
+        self.filter_status = table[1, 1]
+        self.filter_user = table[2, 1]
         
         hbox4 = gtk.HBox()
         hbox4.set_border_width(4)
@@ -242,7 +277,6 @@ class InfoPanel(object):
         self.other_dets_table = DetsTable()
         self.vbox.pack_start(hbox1, False, False, 0)
         self.vbox.pack_start(hbox2, False, False, 0)
-        self.vbox.pack_start(hbox3, False, False, 0)
         self.vbox.pack_start(hbox4, False, False, 0)
         self.vbox.pack_start(self.dets_table.scrolled_window, True, True, 0)
         self.vbox.pack_start(self.other_dets_table.scrolled_window, True, True, 0)
@@ -481,9 +515,20 @@ Dec updated: from {2:.5f} to {3:.5f}"""
         self.info_panel.group_id = group1['id']
         self.new_group()
 
+    def set_filter_prefs(self, widget, filter_prefs):
+        filter_prefs.show()
+        response = filter_prefs.run()
+        print response
+        print filter_prefs.get_action_area()
+        for child in filter_prefs.vbox.get_children():
+            if child.get_name() == 'status':
+                print child.get_val()
+        filter_prefs.hide()
+
+
 parser = argparse.ArgumentParser(description='View CygOB2 detection groups')
 parser.add_argument('--db', type=str,
-                    default='datastore.db3',
+                    default='/data/cygob2/tables/datastore.db3',
                     help='Database file name')
 args = parser.parse_args()
 
@@ -512,6 +557,7 @@ info_panel.group_id_entry.connect('activate', controller.new_group)
 info_panel.randomize.connect('toggled', controller.update_randomize)
 info_panel.split_group.connect('clicked', controller.split_group)
 info_panel.remove_dets.connect('clicked', controller.split_group)
+# info_panel.filter.connect('clicked', controller.set_filter_prefs, filter_prefs)
 info_panel.obsids_radio.set_callback(controller.update_image)
 info_panel.bands_radio.set_callback(controller.update_image)
 
