@@ -33,6 +33,7 @@ bands = dict(broad=(500, 7000),
              soft=(500, 1200),
              medium=(1200, 2000),
              hard=(2000,7000))
+USER = os.environ['USER']
 
 def weighted_mean(vals, val_errs):
     vals = np.array(vals)
@@ -242,18 +243,15 @@ class InfoPanel(object):
         table[0, 0] = gtk.Label('Min dets:')
         table[0, 1] = min_dets
         table[1, 0] = gtk.Label('Status:')
-        table[1, 1] = HBoxValsRadio('status', ['Any', 'OK', 'Bad'])
-        table[2, 0] = gtk.Label('User:')
-        table[2, 1] = HBoxValsRadio('user', ['Any', 'Me'])
-        table[3, 0] = gtk.Label('Obsids:')
-        table[3, 1] = self.obsids_radio
-        table[4, 0] = gtk.Label('Bands:')
-        table[4, 1] = self.bands_radio
+        table[1, 1] = HBoxValsRadio('status', ['Any', 'Not set', 'Not set by me', 'Bad'])
+        table[2, 0] = gtk.Label('Obsids:')
+        table[2, 1] = self.obsids_radio
+        table[3, 0] = gtk.Label('Bands:')
+        table[3, 1] = self.bands_radio
         hbox2 = gtk.HBox(False, 0)
         hbox2.pack_start(table, False, False, 0)
         self.filter_min_dets = table[0, 1]
         self.filter_status = table[1, 1]
-        self.filter_user = table[2, 1]
         
         hbox4 = gtk.HBox()
         hbox4.set_border_width(4)
@@ -305,18 +303,45 @@ class Controller(object):
         self.evt2_cache = {}
         self.image_cache = {}
 
+    def get_new_index(self, offset):
+        index = self.index
+        if offset is None:
+            try:
+                index = self.group_ids.index(self.info_panel.group_id)
+            except ValueError:
+                pass
+        else:
+            min_dets = int(self.info_panel.filter_min_dets.get_text())
+            status = self.info_panel.filter_status.get_val()
+            for j in range(len(self.group_ids)):
+                index = (index + offset) % len(self.group_ids)
+                group_id = self.group_ids[index]
+                group = self.groups[group_id]
+                views = self.get_user_views(group)
+                if len(group['info']['det_ids']) < min_dets:
+                    continue
+                if (status == 'Bad'
+                    and not any(x['status'] == 'BAD' for x in views)):
+                    continue
+                elif (status == 'Not set'
+                      and not all(x['status'] is None for x in views)):
+                    continue
+                elif (status == 'Not set by me'
+                      and not all(x['status'] is None for x in views
+                                  if x['user'] == USER)):
+                    continue
+                break
+            else:
+                print 'No groups match the filter criteria'
+                index = self.index
+
+        return index
+
     def new_group(self, widget=None, offset=None, status=None):
         # Store comment (if modified) to database for current group
         self.store_group(status)
         
-        if offset is None:
-            try:
-                self.index = self.group_ids.index(self.info_panel.group_id)
-            except ValueError:
-                pass
-        else:
-            self.index = (self.index + offset) % len(self.group_ids)
-
+        self.index = self.get_new_index(offset)
         group_id = self.group_ids[self.index]
         self.info_panel.group_id = group_id
         self.group = self.fetch_group(group_id)
@@ -337,7 +362,7 @@ class Controller(object):
 
         views_text = '\n'.join('{0:15s} {1:15s} {2}'.format(x['date'], x['user'],
                                                               x['status'] or '-')
-                               for x in self.get_user_views())
+                               for x in self.get_user_views(self.group))
         self.info_panel.views_textbuffer.set_text(views_text)
         self.info_panel.comment_textbuffer.set_text(self.group['info']['comment'])
 
@@ -427,9 +452,9 @@ class Controller(object):
         group['info'] = pickle.loads(str(group['info']))
         return group
 
-    def get_user_views(self):
+    def get_user_views(self, group):
         user_views = {}
-        for view in self.group['info']['views']:
+        for view in group['info']['views']:
             user = view['user']
             if user not in user_views or view['status'] is not None:
                 user_views[user] = view
@@ -444,7 +469,7 @@ class Controller(object):
         self.group['info']['comment'] = buff.get_text(start, end)
 
         # Add the current view and status info
-        newview = {'user': os.environ['USER'],
+        newview = {'user': USER,
                    'time': time.time(),
                    'date': time.strftime('%Y-%m-%d %H:%M'),
                    'status': status}
@@ -494,7 +519,7 @@ Dec updated: from {2:.5f} to {3:.5f}"""
         add = 'New group {0} created'.format(group2['id'])
         radec1= radec.format(ra1, group1['ra'], dec1, group1['dec'])
         radec2= radec.format(ra1, group2['ra'], dec1, group2['dec'])
-        action = 'Action by {0} at {1}\n'.format(os.environ['USER'], time.strftime('%Y-%m-%d %H:%M'))
+        action = 'Action by {0} at {1}\n'.format(USER, time.strftime('%Y-%m-%d %H:%M'))
         
         comments1 = [remove, add, radec1, action] if split else [remove, radec1, action]
         comments1 = '\n'.join(comments1)
